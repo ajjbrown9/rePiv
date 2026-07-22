@@ -1,0 +1,203 @@
+73a74
+> import os
+74a76
+> import functools
+1480a1483,1518
+> # Resolves a raw header list to canonical column names once, so the two parsers
+> # and the reconciliation reader all name columns identically. Returns the pieces
+> # each caller needs: which source columns were labelled, their cleaned raw text,
+> # the per-column report records, and the resolved canonical names in order.
+> def _resolve_columns(headers, aliases, fuzzy, accept_threshold,
+>                      review_threshold, strip_prefixes):
+>     """Shared header-resolution boilerplate (was copy-pasted into extract_pivot,
+>     extract_hierarchical_pivot and read_total_row)."""
+>     valid_cols = [i for i, h in enumerate(headers) if pd.notna(h)]
+>     raw_names = [str(headers[i]).strip() for i in valid_cols]
+>     records = resolve_headers(
+>         raw_names, aliases=aliases, fuzzy=fuzzy,
+>         accept_threshold=accept_threshold, review_threshold=review_threshold,
+>         strip_prefixes=strip_prefixes,
+>     )
+>     col_names = [mapping_from_records(records)[n] for n in raw_names]
+>     return valid_cols, raw_names, records, col_names
+> 
+> 
+> # Splits resolved columns into value vs. dimension columns by numeric fraction,
+> # probing on the NON-total rows so a subtotal/total row can't skew the vote. This
+> # is the single definition the parsers and read_total_row now share -- previously
+> # three hand-kept-in-sync copies, and the reconciliation baseline depends on it
+> # classifying columns exactly as the parser did.
+> def _split_value_dims(body, col_names, total_re, value_threshold):
+>     """Return (value_cols, dim_cols) for a body whose columns are `col_names`."""
+>     probe = body[~body.apply(
+>         lambda r: any(isinstance(v, str) and total_re.search(v) for v in r.values),
+>         axis=1)]
+>     value_cols, dim_cols = [], []
+>     for c in col_names:
+>         (value_cols if _looks_numeric(probe[c]) >= value_threshold
+>          else dim_cols).append(c)
+>     return value_cols, dim_cols
+> 
+> 
+1552,1556d1589
+<     # Keep only columns that actually have a header label.
+<     valid_cols = [i for i, h in enumerate(headers) if pd.notna(h)]
+<     body = body[valid_cols]
+<     raw_names = [str(headers[i]).strip() for i in valid_cols]
+< 
+1560,1569c1593,1596
+<     records = resolve_headers(
+<         raw_names,
+<         aliases=aliases,
+<         fuzzy=fuzzy,
+<         accept_threshold=accept_threshold,
+<         review_threshold=review_threshold,
+<         strip_prefixes=strip_prefixes,
+<     )
+<     header_map = mapping_from_records(records)
+<     col_names = [header_map[n] for n in raw_names]
+---
+>     valid_cols, raw_names, records, col_names = _resolve_columns(
+>         headers, aliases, fuzzy, accept_threshold, review_threshold,
+>         strip_prefixes)
+>     body = body[valid_cols]
+1577,1583c1604,1605
+<     probe = body[~body.apply(
+<         lambda r: any(isinstance(v, str) and total_re.search(v) for v in r.values),
+<         axis=1)]
+<     value_cols, dim_cols = [], []
+<     for c in col_names:
+<         (value_cols if _looks_numeric(probe[c]) >= value_threshold
+<          else dim_cols).append(c)
+---
+>     value_cols, dim_cols = _split_value_dims(body, col_names, total_re,
+>                                              value_threshold)
+1769,1771c1791,1794
+<             df.insert(0, "source_file", name)
+<             df.insert(1, "source_sha256", digest)
+<             df.insert(2, "ingested_at", stamp)
+---
+>             # PROVENANCE_COLUMNS is the single declaration of these names/order.
+>             for i, (col, val) in enumerate(
+>                     zip(PROVENANCE_COLUMNS, (name, digest, stamp))):
+>                 df.insert(i, col, val)
+1862,1867c1885,1892
+< # Reads a sheet with openpyxl so we can see cell indentation (which pandas
+< # throws away). Returns the values as a DataFrame plus a matching grid of
+< # indent levels, one per cell.
+< def _read_sheet_with_indent(path, sheet=0):
+<     """Return (values_df, indent_df) where indent_df holds each cell's Excel
+<     alignment indent level (int). Column positions line up between the two."""
+---
+> # The actual openpyxl read, memoized on file IDENTITY (path + mtime + size), so
+> # the ~4 places that need the sheet within a single parse()/reconcile pass read
+> # and materialize it ONCE instead of hitting disk each time. The mtime+size in
+> # the key mean a re-saved file is a cache miss and gets re-read -- the cache can
+> # never serve stale bytes. Small maxsize: within a batch only the current file's
+> # reads need to stay warm; older files evict.
+> @functools.lru_cache(maxsize=8)
+> def _read_sheet_cached(abspath, sheet, _mtime_ns, _size):
+1870,1876c1895,1903
+<     wb = load_workbook(path, data_only=True)
+<     ws = wb.worksheets[sheet] if isinstance(sheet, int) else wb[sheet]
+< 
+<     values, indents = [], []
+<     for row in ws.iter_rows():
+<         values.append([c.value for c in row])
+<         indents.append([int(c.alignment.indent or 0) for c in row])
+---
+>     wb = load_workbook(abspath, data_only=True)
+>     try:
+>         ws = wb.worksheets[sheet] if isinstance(sheet, int) else wb[sheet]
+>         values, indents = [], []
+>         for row in ws.iter_rows():
+>             values.append([c.value for c in row])
+>             indents.append([int(c.alignment.indent or 0) for c in row])
+>     finally:
+>         wb.close()
+1884a1912,1924
+> # Reads a sheet with openpyxl so we can see cell indentation (which pandas
+> # throws away). Returns the values as a DataFrame plus a matching grid of
+> # indent levels, one per cell. Backed by the identity-keyed cache above; callers
+> # get fresh COPIES so nobody can mutate another caller's view.
+> def _read_sheet_with_indent(path, sheet=0):
+>     """Return (values_df, indent_df) where indent_df holds each cell's Excel
+>     alignment indent level (int). Column positions line up between the two."""
+>     st = os.stat(path)   # raises FileNotFoundError for a missing file, as before
+>     vdf, idf = _read_sheet_cached(os.path.abspath(path), sheet,
+>                                   st.st_mtime_ns, st.st_size)
+>     return vdf.copy(), idf.copy()
+> 
+> 
+1983c2023,2025
+<     valid_cols = [i for i, h in enumerate(headers) if pd.notna(h)]
+---
+>     valid_cols, raw_names, records, col_names = _resolve_columns(
+>         headers, aliases, fuzzy, accept_threshold, review_threshold,
+>         strip_prefixes)
+1986,1993d2027
+<     raw_names = [str(headers[i]).strip() for i in valid_cols]
+< 
+<     records = resolve_headers(
+<         raw_names, aliases=aliases, fuzzy=fuzzy,
+<         accept_threshold=accept_threshold, review_threshold=review_threshold,
+<         strip_prefixes=strip_prefixes,
+<     )
+<     col_names = [mapping_from_records(records)[n] for n in raw_names]
+2001,2007c2035,2036
+<     non_total = body[~body.apply(
+<         lambda r: any(isinstance(v, str) and total_re.search(v) for v in r.values),
+<         axis=1)]
+<     value_cols, dim_cols = [], []
+<     for c in col_names:
+<         (value_cols if _looks_numeric(non_total[c]) >= value_threshold
+<          else dim_cols).append(c)
+---
+>     value_cols, dim_cols = _split_value_dims(body, col_names, total_re,
+>                                              value_threshold)
+2237,2238d2265
+< # Single front door: figures out which parse class the file needs and runs it.
+< # mode='auto' sniffs; force with mode='flat' or mode='hierarchical'.
+2240,2244c2267,2270
+< # business order and checks each file actually exposes those exact levels after
+< # aliasing -- appending HIGH rows to the report for any missing or unexpected
+< # level, so cross-file misalignment surfaces instead of silently passing.
+< # Applies the DECLARED business hierarchy: every declared level MUST be present
+< # as a column (schema is enforced either way). A level that is genuinely absent
+---
+> # business order and enforces that each file exposes exactly those levels after
+> # aliasing, so cross-file misalignment surfaces instead of silently passing.
+> # Every declared level MUST be present as a column (schema is enforced either
+> # way): appends a HIGH row for any missing or unexpected level. A level absent
+2361c2387,2389
+<     valid_cols = [i for i, h in enumerate(headers) if pd.notna(h)]
+---
+>     valid_cols, raw_names, records, col_names = _resolve_columns(
+>         headers, aliases, fuzzy, accept_threshold, review_threshold,
+>         strip_prefixes)
+2363,2370d2390
+<     raw_names = [str(headers[i]).strip() for i in valid_cols]
+< 
+<     records = resolve_headers(
+<         raw_names, aliases=aliases, fuzzy=fuzzy,
+<         accept_threshold=accept_threshold, review_threshold=review_threshold,
+<         strip_prefixes=strip_prefixes,
+<     )
+<     col_names = [mapping_from_records(records)[n] for n in raw_names]
+2376c2396,2398
+<     # against the wrong number, which is worse than having no gate at all.
+---
+>     # against the wrong number, which is worse than having no gate at all. This
+>     # reuses the parsers' own classifier so the baseline is read on the same
+>     # column split the data was.
+2378,2384c2400,2401
+<     probe = body[~body.apply(
+<         lambda r: any(isinstance(v, str) and total_re.search(v) for v in r.values),
+<         axis=1)]
+<     value_cols, dim_cols = [], []
+<     for c in col_names:
+<         (value_cols if _looks_numeric(probe[c]) >= value_threshold
+<          else dim_cols).append(c)
+---
+>     value_cols, dim_cols = _split_value_dims(body, col_names, total_re,
+>                                              value_threshold)

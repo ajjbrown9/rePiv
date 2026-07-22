@@ -1,0 +1,188 @@
+{
+  "_comment": [
+    "THE DECLARATION. This file -- not the code -- is the artifact you maintain",
+    "with SMEs. The parser obeys it and refuses anything it does not declare.",
+    "",
+    "Per hierarchy level:",
+    "  canonical     : the business level name (order in this list IS the level).",
+    "  aliases       : source column headers that map into this level.",
+    "  vocabulary    : the CLOSED set of valid members. null = open domain (no",
+    "                  membership check; near-duplicate detection only).",
+    "  normalization : which CONDITIONALLY-safe healings are licensed for this",
+    "                  level. Verified at load: a license that would merge two",
+    "                  declared members is rejected before any file is read.",
+    "",
+    "Universally-safe healing (unicode NFKC, zero-width chars, whitespace) is",
+    "ALWAYS on and needs no license -- it can never merge two distinct members.",
+    "",
+    "A member that is not declared here BLOCKS THE LOAD. That includes genuinely",
+    "new members: adding a department is a business decision, so it is made here,",
+    "by a person, with a name and a date on it -- not by a cell in a spreadsheet.",
+    "",
+    "US-LOCALE ASSUMPTION. total_labels, aggregation_prefixes and blank_member_literal",
+    "are the strings a US-English Excel emits. They live here rather than in code so",
+    "that a localized workbook is a five-minute config edit, not a two-day debug."
+  ],
+  "version": "1.0.0",
+  "owner": "data-platform",
+  "updated": "2026-07-13",
+  "metadata": {
+    "declared_fields": [
+      "Report",
+      "Reporter",
+      "Report Type",
+      "Report Team",
+      "Report Date"
+    ],
+    "required_fields": [
+      "Report"
+    ],
+    "check_report_name": true
+  },
+  "matching": {
+    "accept_threshold": 0.85,
+    "review_threshold": 0.6,
+    "fuzzy": true
+  },
+  "reconciliation": {
+    "validate_totals": true,
+    "tolerance": 0.01
+  },
+  "parsing": {
+    "aggregation_prefixes": [
+      "sum of",
+      "count of",
+      "average of",
+      "avg of",
+      "max of",
+      "min of",
+      "total of",
+      "count distinct of"
+    ],
+    "total_labels": [
+      "grand total",
+      "subtotal",
+      "total",
+      "totals",
+      "subtotals"
+    ],
+    "blank_member_literal": "(blank)",
+    "metadata_scan_rows": 12,
+    "value_column_threshold": 0.6,
+    "nearmiss_note_floor": 0.4
+  },
+  "output": {
+    "var_name": "FiscalYear",
+    "value_name": "Value",
+    "sheet": 0
+  },
+  "overrides": {
+    "_comment": "Levels a NAMED report is explicitly permitted to lack. Keyed by report/sheet name or file basename. Scoped deliberately: a blanket switch would also forgive real mapping mistakes.",
+    "allow_missing_levels": {}
+  },
+  "hierarchy": [
+    {
+      "canonical": "DEPT",
+      "aliases": [
+        "Row labels",
+        "Row Labels",
+        "Department",
+        "Dept"
+      ],
+      "vocabulary": [
+        "A",
+        "B",
+        "C",
+        "A subtype 1",
+        "A subtype 2"
+      ],
+      "normalization": {
+        "punctuation": false,
+        "case": false
+      },
+      "mode": "closed"
+    },
+    {
+      "canonical": "Service",
+      "aliases": [
+        "Division",
+        "Div"
+      ],
+      "vocabulary": [
+        "MC",
+        "N",
+        "F",
+        "F1",
+        "F2",
+        "F3"
+      ],
+      "normalization": {
+        "punctuation": true,
+        "case": true
+      },
+      "mode": "closed"
+    },
+    {
+      "canonical": "Variant",
+      "aliases": [
+        "Type",
+        "Varient"
+      ],
+      "vocabulary": [
+        "A",
+        "B",
+        "C"
+      ],
+      "normalization": {
+        "punctuation": false,
+        "case": false
+      },
+      "mode": "closed"
+    },
+    {
+      "canonical": "DEPT DESCRIPTION",
+      "aliases": [
+        "DEPT DESC",
+        "Varient"
+      ],
+      "vocabulary": [
+        "A-2",
+        "B-2",
+        "C-2"
+      ],
+      "normalization": {
+        "punctuation": false,
+        "case": false
+      },
+      "mode": "closed"
+    },
+    {
+      "canonical": "Project",
+      "aliases": [
+        "Proj",
+        "Prj"
+      ],
+      "vocabulary": [
+        "Test Project 1",
+        "Test Project 2",
+        "Test Project 3"
+      ],
+      "normalization": {
+        "punctuation": false,
+        "case": false
+      },
+      "mode": "closed"
+    }
+  ],
+  "registry": {
+    "_comment": "Where the member register lives. Machine-appended, human-approved, never hand-edited. Only used by levels in mode 'registry'.",
+    "path": "members.json",
+    "cardinality_drift_tolerance": 0.25
+  },
+  "_modes": {
+    "_comment": "GOVERNANCE MODE per hierarchy level. Choose by CARDINALITY.",
+    "closed": "You hand-write 'vocabulary'. For small, stable, high-blast-radius levels (3-20 members). Undeclared member -> load blocked.",
+    "registry": "The list builds itself in members.json; a NEW member blocks until approved (in bulk). For granular, churning levels. Set 'bootstrap': true for the FIRST load only, then turn it off.",
+    "observed": "No membership check. Near-duplicate detection + cardinality drift only. For levels too granular to gate."
+  }
+}

@@ -1,0 +1,10 @@
+# Pipeline dependencies. Install with:
+#     python -m pip install -r requirements.txt
+#
+# Tested on Python 3.12 with pandas 3.x. Python 3.9+ recommended;
+# see MANUAL.md "Environment" for the Python 3.7 caveat.
+pandas>=1.5
+openpyxl>=3.0
+numpy>=1.23
+reportlab>=4.0      # PDF reporting stage only
+pytest>=7.0         # dev/ regression suite only
